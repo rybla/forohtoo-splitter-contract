@@ -9,6 +9,11 @@ In more details:
 - Anyone can send a transaction to this contract with an amount of USDC and an address.
     - When this contract recieves an `amount` of USDC and an `address`, it computes `payout_amount = (payout_rate * amount) / 100`. Then the contract sends `payout_amount` to the `address`.
 
+## Resources
+
+- [Solidity docs](https://docs.soliditylang.org/en/v0.8.30/)
+- [Hardhat docs](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3)
+
 ## Contributing
 
 The script `build.sh` must run without any warnings or errors before changes may be comitted.
