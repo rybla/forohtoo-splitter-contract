@@ -1,38 +1,31 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-interface IERC20 {
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-    function allowance(address owner, address spender) external view returns (uint256);
-}
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract Splitter {
-    uint public payout_rate;
-    address public owner;
-    IERC20 public usdc_token;
+contract Splitter is Ownable {
+    uint256 public payout_rate;
+    IERC20 public usdc;
 
-    constructor(uint _payout_rate, address _usdc_address) {
-        require(_payout_rate <= 100, "payout_rate cannot be greater than 100");
+    constructor(uint256 _payout_rate, address _usdcAddress) Ownable(msg.sender) {
+        require(_payout_rate <= 100, "Payout rate must be between 0 and 100");
         payout_rate = _payout_rate;
-        owner = msg.sender;
-        usdc_token = IERC20(_usdc_address);
+        usdc = IERC20(_usdcAddress);
     }
 
-    function split(address _recipient, uint _amount) public {
-        require(usdc_token.allowance(msg.sender, address(this)) >= _amount, "Insufficient allowance");
-        require(usdc_token.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
+    function split(uint256 _amount, address _recipient) external {
+        require(usdc.transferFrom(msg.sender, address(this), _amount), "USDC transfer failed");
 
-        uint payout_amount = (_amount * payout_rate) / 100;
+        uint256 payout_amount = (_amount * payout_rate) / 100;
+
         if (payout_amount > 0) {
-            require(usdc_token.transfer(_recipient, payout_amount), "Payout transfer failed");
+            require(usdc.transfer(_recipient, payout_amount), "Payout transfer failed");
         }
     }
 
-    function withdraw() public {
-        require(msg.sender == owner, "Only owner can withdraw");
-        uint balance = usdc_token.balanceOf(address(this));
-        require(usdc_token.transfer(owner, balance), "Withdrawal failed");
+    function withdraw() external onlyOwner {
+        uint256 balance = usdc.balanceOf(address(this));
+        require(usdc.transfer(owner(), balance), "Withdrawal failed");
     }
 }

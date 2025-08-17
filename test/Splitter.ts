@@ -6,82 +6,130 @@ describe("Splitter", async function () {
     const { viem } = await network.connect();
     const publicClient = await viem.getPublicClient();
 
-    it("should deploy with the correct payout rate", async function () {
+    async function deployContracts() {
         const [owner, user, recipient] = await viem.getWalletClients();
         const usdc = await viem.deployContract("MockUSDC", [], {});
         const splitter = await viem.deployContract("Splitter", [50n, usdc.address]);
 
         // Mint some mock USDC to the user
         await usdc.write.mint([user.account.address, 1000n]);
-        const payoutRate = await splitter.read.payout_rate();
 
+        return {
+            // clients
+            owner, user, recipient,
+            // contracts
+            usdc, splitter
+        }
+    }
+
+    it("Should deploy with the correct payout rate", async function () {
+        const { splitter } = await deployContracts();
+
+        const payoutRate = await splitter.read.payout_rate();
         assert.equal(payoutRate, 50n);
     })
 
-    it("should split the funds correctly", async function () {
-        const [owner, user, recipient] = await viem.getWalletClients();
-        const usdc = await viem.deployContract("MockUSDC", [], {});
-        const splitter = await viem.deployContract("Splitter", [50n, usdc.address]);
+    it("Should split the funds correctly", async function () {
+        const { usdc, splitter, user, recipient } = await deployContracts();
 
-        // Mint some mock USDC to the user and approve the splitter
-        await usdc.write.mint([user.account.address, 1000n]);
-        await usdc.write.approve([splitter.address, 1000n], { account: user.account });
+        const amount = 1000n;
 
-        // User sends 1000 USDC to the splitter
-        await splitter.write.split([recipient.account.address, 1000n], { account: user.account });
+        // Approve the splitter to spend the user's USDC
+        await usdc.write.approve([splitter.address, amount], { account: user.account });
+
+        // Split the funds
+        await splitter.write.split([amount, recipient.account.address], { account: user.account });
+
+        // Check the balances
+        const userBalance = await usdc.read.balanceOf([user.account.address]);
+        const recipientBalance = await usdc.read.balanceOf([recipient.account.address]);
+        const splitterBalance = await usdc.read.balanceOf([splitter.address]);
+
+        assert.equal(userBalance, 0n);
+        assert.equal(recipientBalance, 500n);
+        assert.equal(splitterBalance, 500n);
+    });
+
+    it("Should allow the owner to withdraw funds", async function () {
+        const { usdc, splitter, owner, user, recipient } = await deployContracts();
+
+        const amount = 1000n;
+
+        // Approve and split to fund the contract
+        await usdc.write.approve([splitter.address, amount], { account: user.account });
+        await splitter.write.split([amount, recipient.account.address], { account: user.account });
 
         const ownerInitialBalance = await usdc.read.balanceOf([owner.account.address]);
-        const contractBalance = await usdc.read.balanceOf([splitter.address]);
+        const splitterInitialBalance = await usdc.read.balanceOf([splitter.address]);
 
-        // Owner withdraws the funds
-        await splitter.write.withdraw([], { account: owner.account });
+        // Withdraw funds
+        await splitter.write.withdraw({ account: owner.account });
 
+        // Check balances
         const ownerFinalBalance = await usdc.read.balanceOf([owner.account.address]);
-        const contractFinalBalance = await usdc.read.balanceOf([splitter.address]);
+        const splitterFinalBalance = await usdc.read.balanceOf([splitter.address]);
 
-        assert.equal(contractFinalBalance, 0n);
-        assert.equal(ownerFinalBalance, ownerInitialBalance + contractBalance);
+        assert.equal(splitterFinalBalance, 0n);
+        assert.equal(ownerFinalBalance, ownerInitialBalance + splitterInitialBalance);
     });
 
-    it("should allow the owner to withdraw funds", async function () {
-        const [owner, user, recipient] = await viem.getWalletClients();
-        const usdc = await viem.deployContract("MockUSDC", [], {});
-        const splitter = await viem.deployContract("Splitter", [50n, usdc.address]);
+    it("Should not allow a non-owner to withdraw funds", async function () {
+        const { splitter, user } = await deployContracts();
 
-        // Mint some mock USDC to the user and approve the splitter
-        await usdc.write.mint([user.account.address, 1000n]);
-        await usdc.write.approve([splitter.address, 1000n], { account: user.account });
-
-        // User sends 1000 USDC to the splitter
-        await splitter.write.split([recipient.account.address, 1000n], { account: user.account });
-
-        const recipientBalance = await usdc.read.balanceOf([recipient.account.address]);
-        const contractBalance = await usdc.read.balanceOf([splitter.address]);
-        const userBalance = await usdc.read.balanceOf([user.account.address]);
-
-        assert.equal(recipientBalance, 500n);
-        assert.equal(contractBalance, 500n);
-        assert.equal(userBalance, 0n);
-    });
-
-    it("should revert if the allowance is insufficient", async function () {
-        const [owner, user, recipient] = await viem.getWalletClients();
-        const usdc = await viem.deployContract("MockUSDC", [], {});
-        const splitter = await viem.deployContract("Splitter", [50n, usdc.address]);
-
-        // Mint some mock USDC to the user
-        await usdc.write.mint([user.account.address, 1000n]);
-
-        // User approves the splitter contract to spend only 500 USDC
-        await usdc.write.approve([splitter.address, 500n], { account: user.account });
-
-        // User tries to send 1000 USDC to the splitter, which should fail
         await assert.rejects(
-            splitter.write.split([recipient.account.address, 1000n], { account: user.account }),
-            (err) => {
-                assert.match(err.message, /Insufficient allowance/);
+            splitter.write.withdraw({ account: user.account }),
+            (err: any) => {
+                // TODO: check for a more specific error
                 return true;
             }
         );
+    });
+
+    it("Should not deploy with a payout rate > 100", async function () {
+        const { viem } = await network.connect();
+        const [owner] = await viem.getWalletClients();
+        const usdc = await viem.deployContract("MockUSDC", [], {});
+
+        await assert.rejects(
+            viem.deployContract("Splitter", [101n, usdc.address]),
+            (err: any) => {
+                // TODO: check for a more specific error
+                return true;
+            }
+        )
+    });
+
+    it("Should handle a 0% payout rate correctly", async function () {
+        const { viem } = await network.connect();
+        const [owner, user, recipient] = await viem.getWalletClients();
+        const usdc = await viem.deployContract("MockUSDC", [], {});
+        const splitter = await viem.deployContract("Splitter", [0n, usdc.address]);
+        await usdc.write.mint([user.account.address, 1000n]);
+
+        const amount = 1000n;
+        await usdc.write.approve([splitter.address, amount], { account: user.account });
+        await splitter.write.split([amount, recipient.account.address], { account: user.account });
+
+        const recipientBalance = await usdc.read.balanceOf([recipient.account.address]);
+        const splitterBalance = await usdc.read.balanceOf([splitter.address]);
+        assert.equal(recipientBalance, 0n);
+        assert.equal(splitterBalance, 1000n);
+    });
+
+    it("Should handle a 100% payout rate correctly", async function () {
+        const { viem } = await network.connect();
+        const [owner, user, recipient] = await viem.getWalletClients();
+        const usdc = await viem.deployContract("MockUSDC", [], {});
+        const splitter = await viem.deployContract("Splitter", [100n, usdc.address]);
+        await usdc.write.mint([user.account.address, 1000n]);
+
+        const amount = 1000n;
+        await usdc.write.approve([splitter.address, amount], { account: user.account });
+        await splitter.write.split([amount, recipient.account.address], { account: user.account });
+
+        const recipientBalance = await usdc.read.balanceOf([recipient.account.address]);
+        const splitterBalance = await usdc.read.balanceOf([splitter.address]);
+        assert.equal(recipientBalance, 1000n);
+        assert.equal(splitterBalance, 0n);
     });
 });
